@@ -8,6 +8,7 @@ use deadpool_sync::SyncWrapper;
 pub struct DeadpoolModelWrapper {
     model_path: String,
     scorer_path: Option<String>,
+    runtime: Runtime,
 }
 
 impl DeadpoolModelWrapper {
@@ -16,10 +17,15 @@ impl DeadpoolModelWrapper {
     /// # Arguments
     /// * `model_path` - Path to the model.
     /// * `scorer_path` - Path to the scorer. Optional.
-    pub fn new(model_path: impl Into<String>, scorer_path: Option<impl Into<String>>) -> Self {
+    pub fn new(
+        model_path: impl Into<String>,
+        scorer_path: Option<impl Into<String>>,
+        runtime: Runtime,
+    ) -> Self {
         Self {
             model_path: model_path.into(),
             scorer_path: scorer_path.map(Into::into),
+            runtime,
         }
     }
 }
@@ -41,23 +47,24 @@ impl From<InteractError> for DeadpoolModelWrapperError {
     }
 }
 
+#[async_trait::async_trait]
 impl Manager for DeadpoolModelWrapper {
     type Type = SyncWrapper<crate::Model>;
-    type Error = crate::Error;
+    type Error = DeadpoolModelWrapperError;
 
     async fn create(&self) -> Result<Self::Type, Self::Error> {
-        let mut m = SyncWrapper::new(self.runtime, || crate::Model::new(&self.model_path)).await?;
+        let model_path = self.model_path.clone();
+        let mut m = SyncWrapper::new(self.runtime, move || crate::Model::new(model_path)).await?;
         if let Some(scorer_path) = &self.scorer_path {
-            m.interact(|m| m.enable_external_scorer(scorer_path))
+            let scorer_path = scorer_path.clone();
+            m.interact(move |m| m.enable_external_scorer(scorer_path))
                 .await??;
         }
 
         Ok(m)
     }
 
-    async fn recycle(&self, obj: &mut Self::Type) -> RecycleResult<Self::Error> {
-        obj.interact(|m| m.clear_hot_words()).await??;
-
+    async fn recycle(&self, _: &mut Self::Type) -> RecycleResult<Self::Error> {
         Ok(())
     }
 }
