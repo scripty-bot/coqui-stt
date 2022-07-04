@@ -39,7 +39,7 @@ impl Stream {
         let mut state = std::ptr::null_mut::<coqui_stt_sys::StreamingState>();
 
         let retval =
-            unsafe { coqui_stt_sys::STT_CreateStream(model.0, std::ptr::addr_of_mut!(state)) };
+            unsafe { coqui_stt_sys::STT_CreateStream(model.ptr, std::ptr::addr_of_mut!(state)) };
 
         if let Some(e) = crate::Error::from_c_int(retval) {
             return Err(e);
@@ -76,7 +76,7 @@ impl Stream {
     #[must_use]
     pub unsafe fn into_state(mut self) -> (*mut coqui_stt_sys::StreamingState, Model) {
         self.already_freed = true;
-        (self.state, self.model)
+        (self.state, unsafe { self.model.clone() })
     }
 
     /// Recreate a `Stream` with a pointer to a [`StreamingState`]
@@ -89,10 +89,7 @@ impl Stream {
     /// [`StreamingState`]: coqui_stt_sys::StreamingState
     /// [`Model`]: Model
     #[inline]
-    pub unsafe fn from_ptr(
-        model: Model,
-        state: *mut coqui_stt_sys::StreamingState,
-    ) -> Stream {
+    pub unsafe fn from_ptr(model: Model, state: *mut coqui_stt_sys::StreamingState) -> Stream {
         Self {
             model,
             state,
@@ -257,7 +254,9 @@ impl Stream {
         // SAFETY: the pointer the string points to is not used anywhere after this call
         unsafe { coqui_stt_sys::STT_FreeString(ptr) }
 
-        Ok((String::from_utf8(unchecked_str)?, self.model))
+        Ok((String::from_utf8(unchecked_str)?, unsafe {
+            self.model.clone()
+        }))
     }
 
     /// Compute the final decoding of an ongoing streaming inference
@@ -273,7 +272,10 @@ impl Stream {
     /// # Errors
     /// Passes through any errors from the C library. See enum [`Error`](crate::Error).
     #[inline]
-    pub fn finish_stream_with_metadata(mut self, num_results: u32) -> crate::Result<(Metadata, Model)> {
+    pub fn finish_stream_with_metadata(
+        mut self,
+        num_results: u32,
+    ) -> crate::Result<(Metadata, Model)> {
         let ptr = unsafe { coqui_stt_sys::STT_FinishStreamWithMetadata(self.state, num_results) };
 
         self.already_freed = true;
@@ -282,6 +284,6 @@ impl Stream {
             return Err(crate::Error::Unknown);
         }
 
-        Ok((crate::Metadata::new(ptr), self.model))
+        Ok((crate::Metadata::new(ptr), unsafe { self.model.clone() }))
     }
 }

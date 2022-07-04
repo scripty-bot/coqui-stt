@@ -4,7 +4,10 @@ use std::ffi::CStr;
 use std::os::raw::c_uint;
 
 /// A trained Coqui STT model.
-pub struct Model(pub(crate) *mut coqui_stt_sys::ModelState);
+pub struct Model {
+    pub(crate) ptr: *mut coqui_stt_sys::ModelState,
+    do_free: bool,
+}
 
 // these implementations are safe, as ModelState can be passed between threads safely
 unsafe impl Send for Model {}
@@ -14,7 +17,9 @@ impl Drop for Model {
     #[inline]
     fn drop(&mut self) {
         // SAFETY: this is only called after the model has been disposed of
-        unsafe { coqui_stt_sys::STT_FreeModel(self.0) }
+        if self.do_free {
+            unsafe { coqui_stt_sys::STT_FreeModel(self.ptr) }
+        }
     }
 }
 
@@ -50,7 +55,10 @@ impl Model {
             return Err(crate::Error::Unknown);
         }
 
-        Ok(Self(state))
+        Ok(Self {
+            ptr: state,
+            do_free: true,
+        })
     }
 
     /// Create a new model from a memory buffer.
@@ -86,7 +94,10 @@ impl Model {
             return Err(crate::Error::Unknown);
         }
 
-        Ok(Self(state))
+        Ok(Self {
+            ptr: state,
+            do_free: true,
+        })
     }
 
     /// Take this model, and return the inner model state.
@@ -103,7 +114,7 @@ impl Model {
     pub unsafe fn into_inner(self) -> *mut coqui_stt_sys::ModelState {
         let manual_drop = std::mem::ManuallyDrop::new(self);
 
-        manual_drop.0
+        manual_drop.ptr
     }
 
     /// Create a new model from an existing model state.
@@ -112,7 +123,10 @@ impl Model {
     /// You must ensure `state` is a valid model state.
     #[inline]
     pub const unsafe fn from_model_state(state: *mut coqui_stt_sys::ModelState) -> Self {
-        Self(state)
+        Self {
+            ptr: state,
+            do_free: true,
+        }
     }
 
     /// Enable an external scorer for this model.
@@ -131,7 +145,7 @@ impl Model {
         scorer_path.push(b'\0');
         let scorer_path = CStr::from_bytes_with_nul(scorer_path.as_ref())?;
         handle_error!(coqui_stt_sys::STT_EnableExternalScorer(
-            self.0,
+            self.ptr,
             scorer_path.as_ptr()
         ))
     }
@@ -153,7 +167,7 @@ impl Model {
     #[cfg(not(target_os = "windows"))]
     fn _enable_external_scorer_from_buffer(&mut self, buffer: &[u8]) -> crate::Result<()> {
         handle_error!(coqui_stt_sys::STT_EnableExternalScorerFromBuffer(
-            self.0,
+            self.ptr,
             buffer.as_ptr().cast::<i8>(),
             buffer.len() as c_uint
         ))
@@ -166,7 +180,7 @@ impl Model {
     /// Returns an error if an error happened while disabling the scorer.
     #[inline]
     pub fn disable_external_scorer(&mut self) -> crate::Result<()> {
-        handle_error!(coqui_stt_sys::STT_DisableExternalScorer(self.0))
+        handle_error!(coqui_stt_sys::STT_DisableExternalScorer(self.ptr))
     }
 
     /// Add a hot-word and its boost.
@@ -187,7 +201,7 @@ impl Model {
         word.reserve_exact(1);
         word.push(b'\0');
         let word = CStr::from_bytes_with_nul(word.as_ref())?;
-        handle_error!(coqui_stt_sys::STT_AddHotWord(self.0, word.as_ptr(), boost))
+        handle_error!(coqui_stt_sys::STT_AddHotWord(self.ptr, word.as_ptr(), boost))
     }
 
     /// Remove entry for a hot-word from the hot-words map.
@@ -207,7 +221,7 @@ impl Model {
         word.reserve_exact(1);
         word.push(b'\0');
         let word = CStr::from_bytes_with_nul(word.as_ref())?;
-        handle_error!(coqui_stt_sys::STT_EraseHotWord(self.0, word.as_ptr()))
+        handle_error!(coqui_stt_sys::STT_EraseHotWord(self.ptr, word.as_ptr()))
     }
 
     /// Removes all elements from the hot-words map.
@@ -216,7 +230,7 @@ impl Model {
     /// Passes through any errors from the C library. See enum [`Error`](crate::Error).
     #[inline]
     pub fn clear_hot_words(&mut self) -> crate::Result<()> {
-        handle_error!(coqui_stt_sys::STT_ClearHotWords(self.0))
+        handle_error!(coqui_stt_sys::STT_ClearHotWords(self.ptr))
     }
 
     /// Set hyperparameters alpha and beta of the external scorer.
@@ -229,14 +243,14 @@ impl Model {
     /// Passes through any errors from the C library. See enum [`Error`](crate::Error).
     #[inline]
     pub fn set_scorer_alpha_beta(&mut self, alpha: f32, beta: f32) -> crate::Result<()> {
-        handle_error!(coqui_stt_sys::STT_SetScorerAlphaBeta(self.0, alpha, beta))
+        handle_error!(coqui_stt_sys::STT_SetScorerAlphaBeta(self.ptr, alpha, beta))
     }
 
     /// Return the sample rate expected by a model in Hz.
     #[inline]
     #[must_use]
     pub fn get_sample_rate(&self) -> i32 {
-        unsafe { coqui_stt_sys::STT_GetModelSampleRate(self.0 as *const _) }
+        unsafe { coqui_stt_sys::STT_GetModelSampleRate(self.ptr as *const _) }
     }
 
     /// Use the Coqui STT model to convert speech to text.
@@ -252,7 +266,7 @@ impl Model {
     #[allow(clippy::missing_inline_in_public_items)]
     pub fn speech_to_text(&mut self, buffer: &[i16]) -> crate::Result<String> {
         let ptr = unsafe {
-            coqui_stt_sys::STT_SpeechToText(self.0, buffer.as_ptr(), buffer.len() as c_uint)
+            coqui_stt_sys::STT_SpeechToText(self.ptr, buffer.as_ptr(), buffer.len() as c_uint)
         };
 
         if ptr.is_null() {
@@ -290,7 +304,7 @@ impl Model {
     ) -> crate::Result<Metadata> {
         let ptr = unsafe {
             coqui_stt_sys::STT_SpeechToTextWithMetadata(
-                self.0,
+                self.ptr,
                 buffer.as_ptr(),
                 buffer.len() as c_uint,
                 num_results,
@@ -312,10 +326,10 @@ impl Model {
     /// # Errors
     /// Passes through any errors from the C library. See enum [`Error`](crate::Error).
     #[allow(clippy::missing_inline_in_public_items)]
-    pub fn into_streaming(mut self) -> crate::Result<Stream> {
+    pub fn into_streaming(self) -> crate::Result<Stream> {
         let mut state = std::ptr::null_mut();
 
-        let retval = unsafe { coqui_stt_sys::STT_CreateStream(self.0, &mut state) };
+        let retval = unsafe { coqui_stt_sys::STT_CreateStream(self.ptr, &mut state) };
 
         if let Some(e) = crate::Error::from_c_int(retval) {
             return Err(e);
@@ -330,5 +344,14 @@ impl Model {
             state,
             already_freed: false,
         })
+    }
+
+    /// SAFETY: the caller must assert that the model this is copied from is immediately disposed of.
+    pub(crate) unsafe fn clone(&mut self) -> Self {
+        self.do_free = false;
+        Self {
+            ptr: self.ptr.clone(),
+            do_free: true,
+        }
     }
 }
