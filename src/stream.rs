@@ -2,8 +2,8 @@ use crate::{Metadata, Model};
 use std::ffi::CStr;
 
 /// Streaming inference state.
-pub struct Stream<'a> {
-    pub(crate) model: &'a mut Model,
+pub struct Stream {
+    pub(crate) model: Model,
     pub(crate) state: *mut coqui_stt_sys::StreamingState,
     /// True if this state has already been freed.
     /// This is used to prevent double-freeing.
@@ -17,10 +17,10 @@ pub struct Stream<'a> {
 // the compiler statically enforces that this is used from
 // only one thread at a time with mutable references on all
 // functions that access the C API.
-unsafe impl Send for Stream<'_> {}
-unsafe impl Sync for Stream<'_> {}
+unsafe impl Send for Stream {}
+unsafe impl Sync for Stream {}
 
-impl Drop for Stream<'_> {
+impl Drop for Stream {
     #[inline]
     fn drop(&mut self) {
         if !self.already_freed {
@@ -29,13 +29,13 @@ impl Drop for Stream<'_> {
     }
 }
 
-impl<'a> Stream<'a> {
+impl Stream {
     /// Create a new `Stream` from a [`Model`](Model).
     ///
     /// # Errors
     /// Passes through any errors from the C library. See enum [`Error`](crate::Error).
     #[allow(clippy::missing_inline_in_public_items)]
-    pub fn from_model(model: &'a mut Model) -> crate::Result<Stream<'a>> {
+    pub fn from_model(model: Model) -> crate::Result<Stream> {
         let mut state = std::ptr::null_mut::<coqui_stt_sys::StreamingState>();
 
         let retval =
@@ -74,9 +74,9 @@ impl<'a> Stream<'a> {
     /// [`from_ptr`]: Stream::from_ptr
     #[inline]
     #[must_use]
-    pub unsafe fn into_state(mut self) -> *mut coqui_stt_sys::StreamingState {
+    pub unsafe fn into_state(mut self) -> (*mut coqui_stt_sys::StreamingState, Model) {
         self.already_freed = true;
-        self.state
+        (self.state, self.model)
     }
 
     /// Recreate a `Stream` with a pointer to a [`StreamingState`]
@@ -90,9 +90,9 @@ impl<'a> Stream<'a> {
     /// [`Model`]: Model
     #[inline]
     pub unsafe fn from_ptr(
-        model: &'a mut Model,
+        model: Model,
         state: *mut coqui_stt_sys::StreamingState,
-    ) -> Stream<'a> {
+    ) -> Stream {
         Self {
             model,
             state,
@@ -104,14 +104,14 @@ impl<'a> Stream<'a> {
     #[inline]
     #[must_use]
     pub fn model(&self) -> &Model {
-        self.model
+        &self.model
     }
 
     /// Return a mutable reference to the [`Model`](crate::Model) this wraps.
     #[inline]
     #[must_use]
     pub fn model_mut(&mut self) -> &mut Model {
-        self.model
+        &mut self.model
     }
 
     /// Feed audio samples to an ongoing streaming inference.
@@ -240,7 +240,7 @@ impl<'a> Stream<'a> {
     /// # Errors
     /// Passes through any errors from the C library. See enum [`Error`](crate::Error).
     #[allow(clippy::missing_inline_in_public_items)]
-    pub fn finish_stream(mut self) -> crate::Result<String> {
+    pub fn finish_stream(mut self) -> crate::Result<(String, Model)> {
         let ptr = unsafe { coqui_stt_sys::STT_FinishStream(self.state) };
 
         self.already_freed = true;
@@ -257,7 +257,7 @@ impl<'a> Stream<'a> {
         // SAFETY: the pointer the string points to is not used anywhere after this call
         unsafe { coqui_stt_sys::STT_FreeString(ptr) }
 
-        Ok(String::from_utf8(unchecked_str)?)
+        Ok((String::from_utf8(unchecked_str)?, self.model))
     }
 
     /// Compute the final decoding of an ongoing streaming inference
@@ -273,7 +273,7 @@ impl<'a> Stream<'a> {
     /// # Errors
     /// Passes through any errors from the C library. See enum [`Error`](crate::Error).
     #[inline]
-    pub fn finish_stream_with_metadata(mut self, num_results: u32) -> crate::Result<Metadata> {
+    pub fn finish_stream_with_metadata(mut self, num_results: u32) -> crate::Result<(Metadata, Model)> {
         let ptr = unsafe { coqui_stt_sys::STT_FinishStreamWithMetadata(self.state, num_results) };
 
         self.already_freed = true;
@@ -282,6 +282,6 @@ impl<'a> Stream<'a> {
             return Err(crate::Error::Unknown);
         }
 
-        Ok(crate::Metadata::new(ptr))
+        Ok((crate::Metadata::new(ptr), self.model))
     }
 }
